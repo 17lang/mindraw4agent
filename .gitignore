@@ -1,0 +1,28 @@
+# Dependencies and caches
+node_modules/
+.npm/
+.pnpm-store/
+
+# Runtime output
+MindrawCanvas/
+.mindraw-canvas-registry.json
+sidebar-playwright/
+playwright-report/
+test-results/
+
+# Local validation evidence
+evidence/
+*.log
+*.tmp
+*.secret
+
+# OS and editor noise
+.DS_Store
+.idea/
+.vscode/
+
+# Distribution artifacts
+*.tgz
+*.tar.gz
+*.zip
+*.dmg

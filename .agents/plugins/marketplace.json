@@ -1,0 +1,20 @@
+{
+  "name": "mindraw4agent",
+  "interface": {
+    "displayName": "Mindraw for Agent"
+  },
+  "plugins": [
+    {
+      "name": "mindraw",
+      "source": {
+        "source": "local",
+        "path": "./plugins/mindraw"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
