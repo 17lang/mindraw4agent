@@ -27,6 +27,7 @@ The plugin keeps project canvas selection local to the active workspace. It does
 The first public source candidate is scoped to:
 
 - Mindraw App `>= 1.2.4`;
+- For the canvas health check and recovery flow, a Mindraw App that exposes `inspect_legacy_canvas_recovery` (`legacyCanvasRecovery` capability). The lowest App version that provides it is not yet confirmed; it was verified against Mindraw `1.3.5` on this machine.
 - macOS on Apple Silicon;
 - Codex plugin runtime with local plugin installation support;
 - project-local canvas packages under `MindrawCanvas/`.
@@ -81,6 +82,9 @@ Useful explicit prompts:
 Open Mindraw in sidebar for this project.
 Open Mindraw app for this project.
 Create a new Mindraw project canvas.
+Open the latest Mindraw project canvas in the desktop app.
+在侧边栏打开这个项目的 Mindraw
+在 Mindraw App 中打开这个项目
 ```
 
 The default route starts a local sidebar preview service and prints a project-scoped URL:
@@ -101,10 +105,15 @@ If the preferred port is already owned by another Mindraw project service, the l
 - Desktop handoff uses Mindraw App API `openPackage` when available.
 - On macOS, supported LaunchServices fallback is limited to launching Mindraw or the exact latest-created current-project package.
 - Sidebar API calls include a project identity hash and fail closed on project mismatch.
+- Before a canvas is opened, the Mindraw App judges whether the current project canvas is usable; that result is the only health authority. File names, timestamps, and registry entries are never used as a health substitute.
+- Only an App-confirmed `healthy` canvas may be selected automatically. A `repairable` or `invalid` canvas is never silently replaced: the user chooses `修复此画布 / 打开其他可用画布 / 新建画布`, and the chosen action still runs through Mindraw App APIs.
 
 Important blocker codes include:
 
 - `MINDRAW_CANVAS_CREATE_API_REQUIRED`
+- `MINDRAW_CANVAS_HEALTH_API_REQUIRED`
+- `MINDRAW_CANVAS_HEALTH_RESULT_INVALID`
+- `ACTION_REQUIRED_CANVAS_RECOVERY`
 - `MINDRAW_PREVIEW_SOURCE_REQUIRED`
 - `MINDRAW_PROJECT_CONTEXT_MISMATCH`
 - `MINDRAW_PROJECT_CANVAS_SCOPE_MISMATCH`

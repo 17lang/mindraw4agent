@@ -1,6 +1,6 @@
 {
   "name": "mindraw4agent",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Mindraw Codex plugin, skill, MCP server, and sidebar preview service for project-scoped canvases.",
   "license": "MIT",

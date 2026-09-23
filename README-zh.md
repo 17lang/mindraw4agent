@@ -19,6 +19,7 @@ Mindraw for Codex agents：用于从当前 Codex 工作区打开 Mindraw 项目�
 - MCP stdio server：`mindraw_mcp`
 - 本地只读 sidebar preview service
 - 显式打开 Mindraw desktop app 的 handoff 路径
+- 画布健康检查与故障恢复选择
 
 本插件只选择当前项目内的 project canvas。不读取或发布无关项目目录，不手写 `.mindraw` package internals，本版本也不实现任意 `mindraw://...documentId...elementId...` target-link sidebar entry。
 
@@ -27,6 +28,7 @@ Mindraw for Codex agents：用于从当前 Codex 工作区打开 Mindraw 项目�
 首个公开源码候选范围：
 
 - Mindraw App `>= 1.2.4`
+- 画布健康检查与故障恢复需要 Mindraw App 暴露 `inspect_legacy_canvas_recovery`（`legacyCanvasRecovery` capability）。提供该能力的最低 App 版本尚未核实；本机在 Mindraw `1.3.5` 上已确认存在。
 - macOS Apple Silicon
 - 支持本地 plugin 安装的 Codex runtime
 - 当前项目 `MindrawCanvas/` 下的 project-local canvas package
@@ -81,6 +83,9 @@ Open the Mindraw canvas for this project.
 Open Mindraw in sidebar for this project.
 Open Mindraw app for this project.
 Create a new Mindraw project canvas.
+Open the latest Mindraw project canvas in the desktop app.
+在侧边栏打开这个项目的 Mindraw
+在 Mindraw App 中打开这个项目
 ```
 
 默认路径会启动本地 sidebar preview service，并打印当前项目绑定的 URL：
@@ -101,10 +106,15 @@ http://127.0.0.1:<port>/?project=<hash>
 - Desktop handoff 优先通过 Mindraw App API `openPackage`。
 - macOS LaunchServices fallback 只允许启动 Mindraw 或当前项目 latest-created package。
 - Sidebar API 带 project identity hash；项目不匹配时 fail closed。
+- 打开画布前先由 Mindraw App 判断当前项目画布是否可用，该结果是唯一健康权威；文件名、时间戳、registry 记录都不能替代它。
+- 只有 App 确认 `healthy` 的画布才会被自动选中。`repairable` 或 `invalid` 时不会悄悄切换，而是让用户在 `修复此画布 / 打开其他可用画布 / 新建画布` 中选择，选定的恢复动作仍走 Mindraw App API。
 
 常见 blocker code：
 
 - `MINDRAW_CANVAS_CREATE_API_REQUIRED`
+- `MINDRAW_CANVAS_HEALTH_API_REQUIRED`
+- `MINDRAW_CANVAS_HEALTH_RESULT_INVALID`
+- `ACTION_REQUIRED_CANVAS_RECOVERY`
 - `MINDRAW_PREVIEW_SOURCE_REQUIRED`
 - `MINDRAW_PROJECT_CONTEXT_MISMATCH`
 - `MINDRAW_PROJECT_CANVAS_SCOPE_MISMATCH`

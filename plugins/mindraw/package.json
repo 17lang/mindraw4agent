@@ -1,6 +1,6 @@
 {
   "name": "mindraw-codex-plugin",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Mindraw Codex plugin runtime root for the mindraw4agent public repository.",
   "license": "MIT",
