@@ -26,7 +26,11 @@ const blockerCodes = new Set([
   "MINDRAW_CANVAS_CREATE_FAILED",
   "MINDRAW_PREVIEW_SOURCE_REQUIRED",
   "MINDRAW_APP_API_UNAVAILABLE",
+  "MINDRAW_CANVAS_HEALTH_API_REQUIRED",
+  "MINDRAW_CANVAS_HEALTH_RESULT_INVALID",
 ]);
+const canvasHealthValues = new Set(["healthy", "repairable", "invalid"]);
+const recoveryActionValues = new Set(["repair_current", "open_other_healthy", "create_new"]);
 
 export class MindrawProjectCanvasError extends Error {
   constructor(code, message, details = {}) {
@@ -286,6 +290,8 @@ function makeBlockedState({ projectRoot, canvasDir, registryPath, code, message,
     registryPath,
     latestCreatedCanvasPath: null,
     latestCanvas: null,
+    preferredCanvas: null,
+    recovery: null,
     nextCanvasName: null,
     canvases: [],
     createBlocker: warning,
@@ -533,6 +539,80 @@ function chooseLatestCanvas(canvases) {
   return [...canvases].sort(compareCanvasCreated).at(-1);
 }
 
+function redactCanvasHealth(canvas, health) {
+  return {
+    name: canvas.name,
+    health: health.status,
+    reasonCode: health.reasonCode,
+  };
+}
+
+function normalizeCanvasHealth(result, canvas) {
+  const rawStatus = result?.health ?? result?.status;
+  if (!canvasHealthValues.has(rawStatus)) {
+    throw new MindrawProjectCanvasError("MINDRAW_CANVAS_HEALTH_RESULT_INVALID", "Mindraw did not return a recognized project canvas health result.", {
+      health: typeof rawStatus === "string" ? rawStatus : null,
+    });
+  }
+  return {
+    status: rawStatus,
+    reasonCode: typeof result?.reasonCode === "string" ? result.reasonCode : null,
+    canRepair: rawStatus === "repairable" && result?.canRepair !== false,
+    canvasPath: canvas.path,
+  };
+}
+
+async function getCanvasHealthViaMindraw({ canvas, capabilityPath = defaultCapabilityPath() }) {
+  await requireMindrawCapability({
+    capabilityPath,
+    capabilityName: "legacyCanvasRecovery",
+    expected: "read",
+    method: "mindraw.app.inspect_legacy_canvas_recovery",
+    errorCode: "MINDRAW_CANVAS_HEALTH_API_REQUIRED",
+  });
+  const result = await callMindrawRpc({
+    capabilityPath,
+    method: "mindraw.app.inspect_legacy_canvas_recovery",
+    params: { packagePath: canvas.path },
+  });
+  return normalizeCanvasHealth(result, canvas);
+}
+
+async function inspectCanvasHealth({ canvases, capabilityPath }) {
+  const healthByPath = new Map();
+  for (const canvas of canvases) {
+    healthByPath.set(canvas.path, await getCanvasHealthViaMindraw({ canvas, capabilityPath }));
+  }
+  return healthByPath;
+}
+
+function preferredCanvasFromRegistry(registry, canvases) {
+  const preferredPath = typeof registry?.latestCreatedCanvasPath === "string" ? path.resolve(registry.latestCreatedCanvasPath) : null;
+  return preferredPath ? canvases.find((canvas) => canvas.path === preferredPath) ?? null : null;
+}
+
+function recoveryModel({ preferredCanvas, preferredHealth, canvases, healthByPath }) {
+  if (!preferredCanvas || !preferredHealth || preferredHealth.status === "healthy") return null;
+  const otherHealthyCanvases = canvases
+    .filter((canvas) => canvas.path !== preferredCanvas.path && healthByPath.get(canvas.path)?.status === "healthy")
+    .sort(compareCanvasCreated)
+    .reverse()
+    .map((canvas) => redactCanvasHealth(canvas, healthByPath.get(canvas.path)));
+  return {
+    status: preferredHealth.status,
+    currentCanvas: redactCanvasHealth(preferredCanvas, preferredHealth),
+    message: preferredHealth.status === "repairable"
+      ? "当前项目画布需要先修复，Mindraw Codex 不会直接修改画布文件。"
+      : "当前项目画布无法自动打开，Mindraw Codex 不会改写或悄悄替换它。",
+    options: [
+      { action: "repair_current", label: "修复此画布", available: preferredHealth.canRepair === true },
+      { action: "open_other_healthy", label: "打开其他可用画布", available: otherHealthyCanvases.length > 0 },
+      { action: "create_new", label: "新建画布", available: true },
+    ],
+    otherHealthyCanvases,
+  };
+}
+
 export async function readMindrawCapabilities({ capabilityPath = defaultCapabilityPath() } = {}) {
   const capability = await readJson(capabilityPath, null);
   if (!capability) {
@@ -542,8 +622,9 @@ export async function readMindrawCapabilities({ capabilityPath = defaultCapabili
       createBlankPackage: false,
       previewSnapshot: false,
       openPackage: false,
+      legacyCanvasRecovery: false,
       deepLinkOpen: false,
-      missing: ["createBlankPackage", "previewSnapshot", "openPackage"],
+      missing: ["createBlankPackage", "previewSnapshot", "openPackage", "legacyCanvasRecovery"],
     };
   }
   const methods = Array.isArray(capability.methods) ? capability.methods : [];
@@ -552,6 +633,7 @@ export async function readMindrawCapabilities({ capabilityPath = defaultCapabili
   const createBlankPackage = capabilities.createBlankPackage === "write" || hasMethod("mindraw.app.create_blank_package");
   const previewSnapshot = capabilities.previewSnapshot === "read" || hasMethod("mindraw.app.get_preview_snapshot");
   const openPackage = capabilities.openPackage === "write" || hasMethod("mindraw.app.open_package");
+  const legacyCanvasRecovery = capabilities.legacyCanvasRecovery === "read" || hasMethod("mindraw.app.inspect_legacy_canvas_recovery");
   const deepLinkOpen = capabilities.deepLinkOpen === "open" || false;
   return {
     available: true,
@@ -561,11 +643,13 @@ export async function readMindrawCapabilities({ capabilityPath = defaultCapabili
     createBlankPackage,
     previewSnapshot,
     openPackage,
+    legacyCanvasRecovery,
     deepLinkOpen,
     missing: [
       ...(createBlankPackage ? [] : ["createBlankPackage"]),
       ...(previewSnapshot ? [] : ["previewSnapshot"]),
       ...(openPackage ? [] : ["openPackage"]),
+      ...(legacyCanvasRecovery ? [] : ["legacyCanvasRecovery"]),
     ],
   };
 }
@@ -909,6 +993,7 @@ export async function inspectProjectCanvas({ projectRoot = process.cwd(), create
   let listed = await listCanvasEntries(canvasDir, registry);
   let canvases = listed.canvases;
   warnings.push(...listed.warnings);
+  const registryPreferredCanvas = preferredCanvasFromRegistry(registry, canvases);
   let latest = chooseLatestCanvas(canvases);
   let nextName = nextCanvasName(canvases.map((canvas) => canvas.name));
   let capabilities = await readMindrawCapabilities({ capabilityPath });
@@ -950,6 +1035,36 @@ export async function inspectProjectCanvas({ projectRoot = process.cwd(), create
     capabilities = await readMindrawCapabilities({ capabilityPath });
   }
 
+  let healthByPath = new Map();
+  let healthBlocker = null;
+  if (canvases.length > 0 && !createBlocker) {
+    try {
+      healthByPath = await inspectCanvasHealth({ canvases, capabilityPath });
+    } catch (error) {
+      if (error instanceof MindrawProjectCanvasError) {
+        healthBlocker = createWarning(error.code, error.message, error.details);
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  // A registry is only a preference record. When it is absent, damaged, or stale,
+  // the newest candidate remains the current canvas to be checked; it must not be
+  // silently skipped merely because an older canvas is healthy.
+  const preferredCanvas = createResult
+    ? canvases.find((canvas) => canvas.path === createResult.path) ?? null
+    : registryPreferredCanvas ?? chooseLatestCanvas(canvases);
+  const preferredHealth = preferredCanvas ? healthByPath.get(preferredCanvas.path) ?? null : null;
+  const recovery = healthBlocker || !preferredCanvas || preferredHealth?.status === "healthy"
+    ? null
+    : recoveryModel({ preferredCanvas, preferredHealth, canvases, healthByPath });
+  if (!healthBlocker && !recovery) {
+    latest = chooseLatestCanvas(canvases.filter((canvas) => healthByPath.get(canvas.path)?.status === "healthy"));
+  } else if (healthBlocker || recovery) {
+    latest = null;
+  }
+
   let preview = null;
   if (latest) {
     if (createResult?.previewSnapshot?.available && createResult.path === latest.path) {
@@ -971,6 +1086,7 @@ export async function inspectProjectCanvas({ projectRoot = process.cwd(), create
     }
   }
   const effectiveWarnings = [...warnings];
+  if (healthBlocker) effectiveWarnings.push(healthBlocker);
   if (preview && !preview.available) effectiveWarnings.push({ code: preview.code, message: preview.message });
   if (createBlocker) effectiveWarnings.push(createBlocker);
   if (latest && preview && !preview.available && !effectiveWarnings.some((warning) => blockerCodes.has(warning.code))) {
@@ -979,10 +1095,12 @@ export async function inspectProjectCanvas({ projectRoot = process.cwd(), create
     }));
   }
 
-  const nextRegistry = registryPayload({ projectRoot: resolvedProjectRoot, canvases, latest, warnings: effectiveWarnings });
+  const nextRegistry = registryPayload({ projectRoot: resolvedProjectRoot, canvases, latest: latest ?? preferredCanvas, warnings: effectiveWarnings });
   await writeJson(registryPath, nextRegistry);
   const blockers = effectiveWarnings.filter((warning) => blockerCodes.has(warning.code));
-  const status = blockers.length
+  const status = recovery
+    ? "ACTION_REQUIRED_CANVAS_RECOVERY"
+    : blockers.length
     ? `BLOCKED_${blockers[0].code}`
     : latest
       ? preview?.available
@@ -991,13 +1109,15 @@ export async function inspectProjectCanvas({ projectRoot = process.cwd(), create
       : "BLOCKED_MINDRAW_CANVAS_CREATE_API_REQUIRED";
 
   return {
-    ok: Boolean(latest && preview?.available && !createBlocker),
+    ok: Boolean(latest && preview?.available && !createBlocker && !healthBlocker && !recovery),
     status,
     projectRoot: resolvedProjectRoot,
     canvasDir,
     registryPath,
-    latestCreatedCanvasPath: latest?.path ?? null,
+    latestCreatedCanvasPath: (latest ?? preferredCanvas)?.path ?? null,
     latestCanvas: latest,
+    preferredCanvas: preferredCanvas ? redactCanvasHealth(preferredCanvas, preferredHealth ?? { status: "unknown", reasonCode: null }) : null,
+    recovery,
     nextCanvasName: nextName,
     canvases,
     createBlocker,
@@ -1021,9 +1141,72 @@ export async function inspectProjectCanvas({ projectRoot = process.cwd(), create
   };
 }
 
-export async function openCanvasInMindraw({ canvasPath, dryRun = false, capabilityPath = defaultCapabilityPath(), launchFallbackCommand = defaultMacOpenCommand } = {}) {
+async function repairCanvasViaMindraw({ canvasPath, capabilityPath = defaultCapabilityPath() }) {
+  await requireMindrawCapability({
+    capabilityPath,
+    capabilityName: "legacyCanvasRecovery",
+    expected: "write",
+    method: "mindraw.app.inspect_legacy_canvas_recovery",
+    errorCode: "MINDRAW_CANVAS_REPAIR_API_REQUIRED",
+  });
+  await requireMindrawCapability({
+    capabilityPath,
+    capabilityName: "openPackage",
+    expected: "write",
+    method: "mindraw.app.open_package",
+    errorCode: "MINDRAW_CANVAS_REPAIR_API_REQUIRED",
+  });
+  const result = await callMindrawRpc({
+    capabilityPath,
+    method: "mindraw.app.open_package",
+    params: { packagePath: canvasPath },
+  });
+  if (result.opened !== true) {
+    throw new MindrawProjectCanvasError("MINDRAW_CANVAS_REPAIR_FAILED", "Mindraw did not confirm that the selected project canvas was repaired.");
+  }
+  return { repaired: true, opened: true, backupCreated: result.legacyRecovery?.backupPath ? true : null };
+}
+
+export async function performProjectCanvasRecovery({ projectRoot = process.cwd(), action, canvasName = null, capabilityPath = defaultCapabilityPath(), launchFallbackCommand = defaultMacOpenCommand, dryRunOpen = false } = {}) {
+  if (!recoveryActionValues.has(action)) {
+    throw new MindrawProjectCanvasError("CANVAS_RECOVERY_ACTION_INVALID", "A recognized project canvas recovery action is required.");
+  }
+  const initial = await inspectProjectCanvas({ projectRoot, capabilityPath, launchFallbackCommand });
+  if (action === "create_new") {
+    const state = await inspectProjectCanvas({ projectRoot, createNew: true, capabilityPath, launchFallbackCommand });
+    return { action, state };
+  }
+  if (!initial.recovery?.currentCanvas?.name) {
+    throw new MindrawProjectCanvasError("CANVAS_RECOVERY_NOT_REQUIRED", "The current project canvas does not require a recovery choice.");
+  }
+  if (action === "repair_current") {
+    const repair = initial.recovery.options?.find((option) => option.action === action);
+    if (repair?.available !== true || initial.preferredCanvas?.health !== "repairable") {
+      throw new MindrawProjectCanvasError("CANVAS_REPAIR_NOT_AVAILABLE", "Mindraw did not mark the current project canvas as safely repairable.");
+    }
+    const repaired = await repairCanvasViaMindraw({ canvasPath: initial.latestCreatedCanvasPath, capabilityPath });
+    const state = await inspectProjectCanvas({ projectRoot, capabilityPath, launchFallbackCommand });
+    return { action, repaired, state };
+  }
+  const candidates = initial.recovery.otherHealthyCanvases ?? [];
+  const chosen = candidates.find((canvas) => canvas.name === canvasName) ?? null;
+  if (!chosen) {
+    throw new MindrawProjectCanvasError("CANVAS_HEALTHY_SELECTION_REQUIRED", "Choose one of the available healthy project canvases.");
+  }
+  const selected = initial.canvases.find((canvas) => canvas.name === chosen.name) ?? null;
+  if (!selected) {
+    throw new MindrawProjectCanvasError("CANVAS_HEALTHY_SELECTION_REQUIRED", "The selected healthy project canvas is no longer available.");
+  }
+  const opened = await openCanvasInMindraw({ canvasPath: selected.path, healthConfirmed: true, dryRun: dryRunOpen, capabilityPath, launchFallbackCommand });
+  return { action, opened, state: initial };
+}
+
+export async function openCanvasInMindraw({ canvasPath, healthConfirmed = false, dryRun = false, capabilityPath = defaultCapabilityPath(), launchFallbackCommand = defaultMacOpenCommand } = {}) {
   if (!canvasPath) {
     throw new MindrawProjectCanvasError("CANVAS_PATH_REQUIRED", "A .mindraw path is required to open Mindraw.");
+  }
+  if (healthConfirmed !== true) {
+    throw new MindrawProjectCanvasError("MINDRAW_CANVAS_HEALTH_CONFIRMATION_REQUIRED", "Mindraw must confirm that a project canvas is healthy before it can be opened by M4C.");
   }
   try {
     await requireMindrawCapability({
@@ -1084,6 +1267,8 @@ export function publicState(state) {
     registryPath: state.registryPath,
     latestCreatedCanvasPath: state.latestCreatedCanvasPath,
     latestCanvas: state.latestCanvas,
+    preferredCanvas: state.preferredCanvas ?? null,
+    recovery: state.recovery ?? null,
     nextCanvasName: state.nextCanvasName,
     canvasCount: state.canvases.length,
     createBlocker: state.createBlocker,
