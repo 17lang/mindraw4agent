@@ -17,7 +17,7 @@ export function parseFrameLink(link) {
   return { documentId: url.searchParams.get('documentId'), sourceFrameId: url.searchParams.get('elementId') };
 }
 
-async function runtime() {
+export async function runtime() {
   let c;
   try { c = JSON.parse(await readFile(process.env.MINDRAW_RUNTIME_CAPABILITY_PATH || join(homedir(), 'Library/Application Support/com.mindraw.desktop/runtime/write-api.json'), 'utf8')); } catch { fail('MINDRAW_NOT_RUNNING', 'Open Mindraw and the linked document, then retry.'); }
   let endpoint;
@@ -26,7 +26,7 @@ async function runtime() {
   for (const method of ['get_live_frame_context', 'get_target_frame_pixel_payload']) if (!c.methods?.includes(`mindraw.app.${method}`)) fail('APP_UPDATE_REQUIRED', 'This Mindraw App does not expose Frame reading.');
   return c;
 }
-async function rpc(c, method, params) {
+export async function rpc(c, method, params) {
   let response;
   try { response = await fetch(c.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${c.token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: `mindraw.app.${method}`, params }), signal: AbortSignal.timeout(20000) }); } catch { fail('APP_UNAVAILABLE', 'Mindraw did not respond. Open the App and retry.'); }
   if (!response.ok) fail('APP_UNAVAILABLE', 'Mindraw rejected the read request.');
@@ -37,8 +37,8 @@ async function rpc(c, method, params) {
   let wire; try { wire = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail('INVALID_APP_RESPONSE', 'Mindraw returned an invalid response.'); }
   if (wire.error || wire.result?.ok !== true) {
     const code = wire.result?.error?.code || wire.error?.code;
-    const known = ['APP_DOCUMENT_NOT_OPEN','APP_DOCUMENT_AMBIGUOUS','ACTIVE_EDITOR_UNAVAILABLE','TARGET_NOT_FRAME','TARGET_NOT_FOUND','FRAME_IMAGE_UNAVAILABLE','TARGET_FRAME_PIXEL_PAYLOAD_REQUIRED'];
-    fail(known.includes(code) ? code : 'APP_READ_FAILED', known.includes(code) ? `Mindraw read blocked: ${code}.` : 'Mindraw could not read this Frame.');
+    const known = ['APP_DOCUMENT_NOT_OPEN','APP_DOCUMENT_AMBIGUOUS','ACTIVE_EDITOR_UNAVAILABLE','TARGET_NOT_FRAME','TARGET_NOT_FOUND','FRAME_IMAGE_UNAVAILABLE','TARGET_FRAME_PIXEL_PAYLOAD_REQUIRED','WORKING_REVISION_MISMATCH','WRITE_LEASE_CONFLICT','WRITE_LEASE_EXPIRED','WRITE_LEASE_NOT_FOUND','MUTATION_SCHEMA_INVALID','SAVE_FAILED','SOURCE_PRESERVATION_FAILED','DOCUMENT_IS_DIRTY','DOCUMENT_IS_SAVING','LEASE_ACTOR_MISMATCH','LEASE_ALREADY_HELD','LEASE_EXPIRED','LEASE_NOT_FOUND','MUTATION_NOT_ALLOWED','WRITE_PLAN_MISMATCH'];
+    fail(known.includes(code) ? code : 'APP_READ_FAILED', known.includes(code) ? `Mindraw request blocked: ${code}.` : 'Mindraw could not read this Frame.');
   }
   return wire.result;
 }

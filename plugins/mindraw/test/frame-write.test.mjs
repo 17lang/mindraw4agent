@@ -1,0 +1,47 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { writeFrameImage } from '../lib/frame-write.mjs';
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64');
+const rev='sha256:'+'a'.repeat(64), next='sha256:'+'b'.repeat(64);
+async function fixture(run) {
+ const root=await mkdtemp(join(tmpdir(),'mindraw-image-write-'));const imagePath=join(root,'generated.png');await writeFile(imagePath,png);const calls=[];let stateReads=0;
+ const options={feature:true,active:true,dirty:false,revision:rev,commitError:null,dropCommit:false,brokenCommitBody:false,releaseError:false,badReceipt:false};
+ const server=createServer(async(req,res)=>{let raw='';for await(const chunk of req)raw+=chunk;const q=JSON.parse(raw);calls.push(q);assert.equal(req.headers.authorization,'Bearer fixture-token-long-enough');let result={ok:true};let error;
+ const state={ok:true,documentId:'board',packagePath:join(root,'test.mindraw'),isOpen:true,isActive:options.active,isDirty:options.dirty,isSaving:false,workingRevision:stateReads>0?next:options.revision};
+ switch(q.method){
+ case 'mindraw.app.get_capabilities':result={ok:true,features:options.feature?{productionFrameImageWriteback:{version:1,idempotent:true}}:{}};break;
+ case 'mindraw.app.get_open_document_state':stateReads++;result=state;break;
+ case 'mindraw.app.get_live_frame_context':result={ok:true,documentId:'board',sourceFrameId:'frame',target:{kind:'frame',elementId:'frame'},readScope:'frame-only',isDirty:false,workingRevision:rev,elements:[{type:'text',text:'Draw the approved red robot.'}],scopeAudit:{outsideTextIncluded:false}};break;
+ case 'mindraw.app.acquire_write_lease':result={ok:true,...q.params,leaseId:'lease_fixture'};break;
+ case 'mindraw.app.commit_write_result':if(options.brokenCommitBody){res.writeHead(200,{'content-type':'application/json'});res.write('{');setTimeout(()=>res.destroy(),10);return;}if(options.dropCommit){req.socket.destroy();return;}if(options.commitError)error={code:options.commitError,message:'private source path and secret'};else result={ok:true,documentId:'board',sourceFrameId:'frame',resultFrameId:'result',createdFileIds:['image'],revisionBefore:rev,revisionAfter:next,saved:!options.badReceipt};break;
+ case 'mindraw.app.release_write_lease':if(options.releaseError)error={code:'PRIVATE_INTERNAL_ERROR',message:'secret'};break;
+ default:throw new Error(q.method);
+ }
+ res.setHeader('content-type','application/json');res.end(JSON.stringify({jsonrpc:'2.0',id:q.id,...(error?{error}:{result})}));});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const cap=join(root,'cap.json');await writeFile(cap,JSON.stringify({endpoint:`http://127.0.0.1:${server.address().port}/rpc`,token:'fixture-token-long-enough',methods:['get_live_frame_context','get_target_frame_pixel_payload','get_capabilities','get_open_document_state','acquire_write_lease','commit_write_result','release_write_lease'].map(n=>'mindraw.app.'+n)}));const old=process.env.MINDRAW_RUNTIME_CAPABILITY_PATH;process.env.MINDRAW_RUNTIME_CAPABILITY_PATH=cap;
+ const input={link:'mindraw://localhost?documentId=board&elementId=frame&packageFormat=production',imagePath,expectedWorkingRevision:rev,writePlanId:'intent_robot_001'};
+ try{await run({input,options,calls,root,cap});}finally{if(old===undefined)delete process.env.MINDRAW_RUNTIME_CAPABILITY_PATH;else process.env.MINDRAW_RUNTIME_CAPABILITY_PATH=old;await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});}
+}
+test('write binds image, source path, revision and lease; saves right-side Frame then releases',()=>fixture(async({input,calls})=>{const result=await writeFrameImage(input);assert.equal(result.saved,true);assert.equal(result.resultFrameId,'result');assert.deepEqual(result.warnings,[]);const c=calls.find(q=>q.method.endsWith('commit_write_result'));assert.equal(c.params.mutation.layout.strategy,'right-of-source-frame');assert.equal(c.params.expectedWorkingRevision,rev);assert.equal(c.params.mutation.imageResult.byteLength,png.length);assert.equal(c.params.mutation.imageResult.dataURL,'data:image/png;base64,'+png.toString('base64'));assert.equal(c.params.packagePath,calls.find(q=>q.method.endsWith('acquire_write_lease')).params.packagePath);assert(calls.at(-1).method.endsWith('release_write_lease'));const text=JSON.stringify(result);for(const privateValue of [input.imagePath,c.params.packagePath,'fixture-token','lease_fixture','data:image'])assert(!text.includes(privateValue));}));
+test('old App with same mutation method is rejected before lease or commit',()=>fixture(async({input,options,calls})=>{options.feature=false;await assert.rejects(writeFrameImage(input),{code:'APP_WRITEBACK_UPDATE_REQUIRED'});assert.equal(calls.length,1);}));
+test('existing drafts and stale source revisions never acquire a write lease',()=>fixture(async({input,options,calls})=>{options.dirty=true;await assert.rejects(writeFrameImage(input),{code:'DOCUMENT_NOT_CLEAN'});assert(!calls.some(q=>q.method.endsWith('acquire_write_lease')));}));
+test('revision mismatch stops before mutation',()=>fixture(async({input,options,calls})=>{options.revision=next;await assert.rejects(writeFrameImage(input),{code:'WORKING_REVISION_MISMATCH'});assert(!calls.some(q=>q.method.endsWith('commit_write_result')));}));
+test('invalid PNG, symlink and missing stable intent fail before any App request',()=>fixture(async({input,calls,root})=>{await assert.rejects(writeFrameImage({...input,writePlanId:''}),{code:'INVALID_WRITE_INPUT'});const link=join(root,'linked.png');await symlink(input.imagePath,link);await assert.rejects(writeFrameImage({...input,imagePath:link}),{code:'INVALID_IMAGE_INPUT'});await writeFile(input.imagePath,'not a PNG');await assert.rejects(writeFrameImage(input),{code:'INVALID_IMAGE_INPUT'});assert.equal(calls.length,0);}));
+test('lost commit response is uncertain, never retried, and lease release is attempted',()=>fixture(async({input,options,calls})=>{options.dropCommit=true;await assert.rejects(writeFrameImage(input),{code:'WRITE_OUTCOME_UNKNOWN'});assert.equal(calls.filter(q=>q.method.endsWith('commit_write_result')).length,1);assert(calls.at(-1).method.endsWith('release_write_lease'));}));
+test('save failure is sanitized and never reported as successful persistence',()=>fixture(async({input,options,calls})=>{options.commitError='SAVE_FAILED';await assert.rejects(writeFrameImage(input),e=>e.code==='SAVE_FAILED'&&!e.message.includes('private'));assert(calls.at(-1).method.endsWith('release_write_lease'));}));
+test('release failure does not hide successful save',()=>fixture(async({input,options})=>{options.releaseError=true;const result=await writeFrameImage(input);assert(result.warnings.includes('LEASE_RELEASE_UNCONFIRMED'));}));
+
+test('incomplete save receipt is never called a successful write',()=>fixture(async({input,options})=>{options.badReceipt=true;await assert.rejects(writeFrameImage(input),{code:'WRITE_OUTCOME_UNKNOWN'});}));
+test('App rechecks stale revision at commit and plugin does not retry',()=>fixture(async({input,options,calls})=>{options.commitError='WORKING_REVISION_MISMATCH';await assert.rejects(writeFrameImage(input),{code:'WORKING_REVISION_MISMATCH'});assert.equal(calls.filter(q=>q.method.endsWith('commit_write_result')).length,1);}));
+
+test('native stdio discovers write metadata and emits a sanitized write receipt',()=>fixture(async({input,cap})=>{const child=spawn(process.execPath,[fileURLToPath(new URL('../mcp/server.mjs',import.meta.url))],{env:{...process.env,MINDRAW_RUNTIME_CAPABILITY_PATH:cap},stdio:['pipe','pipe','pipe']});let out='',err='';child.stdout.on('data',c=>out+=c);child.stderr.on('data',c=>err+=c);const timeout=setTimeout(()=>child.kill(),10000);child.stdin.end([{jsonrpc:'2.0',id:1,method:'initialize'},{jsonrpc:'2.0',id:2,method:'tools/list'},{jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'write_mindraw_frame_image',arguments:input}}].map(x=>JSON.stringify(x)).join('\n')+'\n');const code=await new Promise(resolve=>child.once('close',resolve));clearTimeout(timeout);assert.equal(code,0,err);const rows=out.trim().split(/\r?\n/).map(x=>JSON.parse(x));const tool=rows[1].result.tools.find(t=>t.name==='write_mindraw_frame_image');assert.equal(tool.annotations.readOnlyHint,false);assert.equal(tool.annotations.idempotentHint,true);assert.equal(JSON.parse(rows[2].result.content[0].text).saved,true);assert(!out.includes(input.imagePath));assert(!out.includes('fixture-token'));}));
+
+test('truncated commit response body also reports uncertain outcome and releases lease',()=>fixture(async({input,options,calls})=>{options.brokenCommitBody=true;await assert.rejects(writeFrameImage(input),{code:'WRITE_OUTCOME_UNKNOWN'});assert(calls.at(-1).method.endsWith('release_write_lease'));}));
+
+test('non-active source document is refused without changing tabs or acquiring a lease',()=>fixture(async({input,options,calls})=>{options.active=false;await assert.rejects(writeFrameImage(input),{code:'DOCUMENT_NOT_ACTIVE'});assert(!calls.some(q=>q.method.endsWith('acquire_write_lease')));}));

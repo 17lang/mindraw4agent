@@ -2,6 +2,7 @@
 import { inspectProjectCanvas, openCanvasInMindraw, performProjectCanvasRecovery, publicState, stableJson } from "../lib/project-canvas.mjs";
 
 import { readFrameLink } from '../lib/frame-read.mjs';
+import { writeFrameImage } from '../lib/frame-write.mjs';
 
 let nextId = 1;
 
@@ -11,6 +12,12 @@ function send(message) {
 
 function toolDefinitions() {
   return [
+    {
+      name: 'write_mindraw_frame_image',
+      description: 'Save an explicitly approved generated PNG into a new result Frame to the right of the source, preserving source content. Requires a clean open document, the revision from read_mindraw_frame and a stable writePlanId. Never generates images, opens documents or retries uncertain commits automatically.',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      inputSchema: { type: 'object', properties: { link: { type: 'string' }, imagePath: { type: 'string', description: 'Absolute local path of the approved generated PNG; no URLs.' }, expectedWorkingRevision: { type: 'string' }, writePlanId: { type: 'string', description: 'Stable unique intent ID. Keep it for any outcome reconciliation.' } }, required: ['link','imagePath','expectedWorkingRevision','writePlanId'], additionalProperties: false }
+    },
     {
       name: "read_mindraw_frame",
       description: "Read a complete mindraw://localhost Frame link from an already open Mindraw document. Returns target-only text, annotation elements, revisions and a PNG image. Read-only: never opens, edits or scans packages. Prefer this tool for pasted Mindraw Frame links.",
@@ -118,7 +125,7 @@ async function handle(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "mindraw-project-canvas", version: "0.2.0" }
+        serverInfo: { name: "mindraw-project-canvas", version: "0.3.0" }
       }
     };
   }
@@ -126,6 +133,10 @@ async function handle(message) {
     return { jsonrpc: "2.0", id: message.id, result: { tools: toolDefinitions() } };
   }
   if (message.method === "tools/call") {
+    if (message.params?.name === 'write_mindraw_frame_image') {
+      try { return { jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: JSON.stringify(await writeFrameImage(message.params?.arguments)) }], isError: false } }; }
+      catch (error) { return { jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: error.code || 'FRAME_WRITE_FAILED', message: error.code ? error.message : 'Frame writeback failed.' }) }], isError: true } }; }
+    }
     if (message.params?.name === 'read_mindraw_frame') {
       try { return { jsonrpc: '2.0', id: message.id, result: await readFrameLink(message.params?.arguments?.link) }; }
       catch (error) { return { jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: error.code || 'FRAME_READ_FAILED', message: error.code ? error.message : 'Frame reading failed.' }) }], isError: true } }; }

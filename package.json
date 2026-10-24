@@ -1,8 +1,8 @@
 {
   "name": "mindraw4agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Read Mindraw Frame links as text, annotations and PNG through the App API; open project canvases.",
+  "description": "Read Mindraw Frames and write approved generated PNGs to a preserved-source result Frame through controlled App APIs.",
   "license": "MIT",
   "author": {
     "name": "张军锋"
@@ -27,6 +27,7 @@
     "smoke:mcp": "npm run --prefix plugins/mindraw smoke:mcp",
     "smoke:sidebar": "npm run --prefix plugins/mindraw smoke:sidebar",
     "doctor": "node scripts/doctor.mjs",
-    "test:frame": "node --test plugins/mindraw/test/frame-read.test.mjs"
+    "test:frame": "node --test plugins/mindraw/test/frame-read.test.mjs",
+    "test:write": "node --test plugins/mindraw/test/frame-write.test.mjs"
   }
 }

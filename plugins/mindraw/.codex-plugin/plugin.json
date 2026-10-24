@@ -1,7 +1,7 @@
 {
   "name": "mindraw",
-  "version": "0.2.0",
-  "description": "Read Mindraw Frame links as text, annotations and PNG through the App API; open project canvases.",
+  "version": "0.3.0",
+  "description": "Read Mindraw Frames and write approved generated PNGs to a preserved-source result Frame through controlled App APIs.",
   "author": {
     "name": "张军锋"
   },
@@ -13,7 +13,7 @@
   "interface": {
     "displayName": "Mindraw",
     "shortDescription": "Read Mindraw Frame links and open project canvases.",
-    "longDescription": "Mindraw provides a thin Codex plugin entry for project-scoped visual canvases. It prepares the active project's MindrawCanvas directory, preserves latest-created canvas selection rules, starts a project-scoped local read-only sidebar preview by default, and supports explicit Mindraw desktop app handoff when the user asks to open the project canvas in the app.",
+    "longDescription": "Read target Frame text, annotations and PNGs; with a paired compatible App, write an explicitly approved generated PNG to a new result Frame while preserving the source. Project canvas sidebar tools remain available.",
     "developerName": "海南万幸科技有限公司",
     "category": "Productivity",
     "capabilities": [
@@ -21,7 +21,8 @@
       "Local read-only preview shell",
       "Mindraw desktop handoff",
       "MCP project canvas inspection",
-      "Read-only Frame link text and image"
+      "Read-only Frame link text and image",
+      "Controlled generated PNG result Frame writeback"
     ],
     "defaultPrompt": [
       "Read this Mindraw Frame link.",

@@ -1,3 +1,15 @@
+## 0.3.0 — 2026-10-24
+
+- Approved PNG writeback with controlled App capability, leases, revision checks and stable intent.
+- Paired App2.3.0 image-only result Frame; preserved source; local native Agent and cold reopen verified.
+- Chinese first-user guide and explicit acceptance boundaries.
+
+## 0.3.0 development candidate
+
+- Add explicitly authorized generated PNG writeback through a versioned App capability gate, exact revision, bound lease and controlled save receipt. Preserve source content and create a right-side result Frame.
+- Refuse old production write APIs, drafts, stale revisions and invalid images before mutation; never retry uncertain commits automatically.
+- Paired App integration/save/reopen remains pending. No public0.3.0 release or App version change is implied.
+
 ## 0.2.0 review corrections
 
 - Require nonempty context, working and visual revision evidence before comparing responses.

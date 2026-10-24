@@ -1,8 +1,8 @@
 {
   "name": "mindraw-codex-plugin",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Read Mindraw Frame links as text, annotations and PNG through the App API; open project canvases.",
+  "description": "Read Mindraw Frames and write approved generated PNGs to a preserved-source result Frame through controlled App APIs.",
   "license": "MIT",
   "author": {
     "name": "张军锋"
@@ -20,13 +20,14 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "node --check scripts/mindraw-canvas-service.mjs && node --check lib/project-canvas.mjs && node --check mcp/server.mjs && node --check scripts/doctor.mjs && node --check lib/frame-read.mjs && node --check lib/png-integrity.mjs",
+    "check": "node --check scripts/mindraw-canvas-service.mjs && node --check lib/project-canvas.mjs && node --check mcp/server.mjs && node --check scripts/doctor.mjs && node --check lib/frame-read.mjs && node --check lib/png-integrity.mjs && node --check lib/frame-write.mjs",
     "smoke": "node scripts/mindraw-canvas-service.mjs smoke",
     "smoke:http": "node scripts/mindraw-canvas-service.mjs smoke-http",
     "smoke:lifecycle": "node scripts/mindraw-canvas-service.mjs smoke-lifecycle",
     "smoke:mcp": "node scripts/mindraw-canvas-service.mjs smoke-mcp",
     "smoke:sidebar": "node scripts/mindraw-canvas-service.mjs smoke-sidebar",
     "doctor": "node scripts/doctor.mjs",
-    "test:frame": "node --test test/frame-read.test.mjs"
+    "test:frame": "node --test test/frame-read.test.mjs",
+    "test:write": "node --test test/frame-write.test.mjs"
   }
 }
