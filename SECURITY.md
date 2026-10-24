@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-The first public source candidate supports `mindraw4agent` `0.1.3` with Mindraw App `>= 1.2.4` on macOS Apple Silicon.
+The current source candidate supports `mindraw4agent` `0.1.4` (and the published `0.1.3`) with Mindraw App `>= 1.2.4` on macOS Apple Silicon. The canvas health check and recovery flow additionally requires a Mindraw App that exposes the `legacyCanvasRecovery` capability.
 
 ## Reporting A Vulnerability
 

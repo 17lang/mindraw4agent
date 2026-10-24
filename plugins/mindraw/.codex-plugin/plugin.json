@@ -1,7 +1,7 @@
 {
   "name": "mindraw",
-  "version": "0.1.3+codex.20260708220005",
-  "description": "Open a project-scoped Mindraw canvas from Codex in the sidebar preview or Mindraw desktop app.",
+  "version": "0.2.0",
+  "description": "Read Mindraw Frame links as text, annotations and PNG through the App API; open project canvases.",
   "author": {
     "name": "张军锋"
   },
@@ -12,7 +12,7 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Mindraw",
-    "shortDescription": "Open the Mindraw canvas for the active Codex project.",
+    "shortDescription": "Read Mindraw Frame links and open project canvases.",
     "longDescription": "Mindraw provides a thin Codex plugin entry for project-scoped visual canvases. It prepares the active project's MindrawCanvas directory, preserves latest-created canvas selection rules, starts a project-scoped local read-only sidebar preview by default, and supports explicit Mindraw desktop app handoff when the user asks to open the project canvas in the app.",
     "developerName": "海南万幸科技有限公司",
     "category": "Productivity",
@@ -20,10 +20,11 @@
       "Project-local canvas entry",
       "Local read-only preview shell",
       "Mindraw desktop handoff",
-      "MCP project canvas inspection"
+      "MCP project canvas inspection",
+      "Read-only Frame link text and image"
     ],
     "defaultPrompt": [
-      "Open the Mindraw canvas for this project.",
+      "Read this Mindraw Frame link.",
       "Open Mindraw in sidebar for this project.",
       "Open Mindraw app for this project."
     ]

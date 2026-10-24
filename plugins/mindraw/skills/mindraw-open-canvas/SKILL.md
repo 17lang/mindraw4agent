@@ -38,7 +38,7 @@ Use this skill when the user says:
    ```
 
 6. Open the printed project-scoped `http://127.0.0.1:<port>/?project=<hash>` URL in the Codex browser/sidebar when available, and include the URL, `projectRoot`, `MindrawCanvas/` directory, status, and any blocker in the response. If browser opening is unavailable, still return the clickable URL and state. If the preferred local port belongs to another Mindraw project service, use the newly printed URL instead of reusing the old port.
-7. For Mindraw desktop app requests, call `open_mindraw_project_canvas` after inspect/create, and hand off through Mindraw `openPackage` capability when available. On macOS, if the runtime capability file or App API is unavailable, the handoff may fall back to LaunchServices for the exact latest-created `.mindraw` package. App requests do not need to start or return the sidebar preview URL.
+7. For Mindraw desktop app requests, call `open_mindraw_project_canvas` after inspect/create. Only an App-confirmed `healthy` canvas may be handed off through `openPackage`. If the state is `ACTION_REQUIRED_CANVAS_RECOVERY`, present the explicit choices `修复此画布 / 打开其他可用画布 / 新建画布` and use `recover_mindraw_project_canvas` only after the user chooses; never infer a choice from timestamps or registry entries. App requests do not need to start or return the sidebar preview URL.
 8. Call `open_mindraw_project_canvas` for sidebar requests only when the sidebar's `编辑` button / preview double-click path is invoked, or when the user explicitly asks to edit/open in the Mindraw desktop app.
 9. For sidebar preview, expect the page to poll `/api/state`, reload `/api/preview` with a project identity token plus revision cache-buster, and expose a manual refresh control. If Mindraw cannot prove a fresh preview source or the sidebar belongs to another project service, the sidebar must show a visible blocker instead of a stale image.
 10. If `编辑` or preview double-click opens Mindraw but focus/frontmost status is not confirmed, tell the user that the package was handed off and they may need to switch to Mindraw or another macOS Space. Treat this as actionable feedback, not a silent no-op.
@@ -52,6 +52,8 @@ Use this skill when the user says:
 	   - `MINDRAW_PREVIEW_SOURCE_REQUIRED`: Mindraw previewSnapshot capability did not return a complete read-only preview artifact.
 	   - `MINDRAW_PROJECT_CONTEXT_MISMATCH`: The sidebar URL or API request belongs to another project canvas service. Reopen the sidebar for the active project and use the newly printed URL.
 	   - `MINDRAW_OPEN_PACKAGE_API_REQUIRED`: Mindraw openPackage desktop handoff and any supported macOS LaunchServices fallback are unavailable on this platform or environment.
+	   - `MINDRAW_CANVAS_HEALTH_API_REQUIRED`: Mindraw has not exposed the required `inspect_legacy_canvas_recovery` read API. Do not use package names, timestamps, the registry, or preview files as a replacement health check.
+	   - `ACTION_REQUIRED_CANVAS_RECOVERY`: The preferred canvas is repairable or invalid. Do not silently open another canvas; show the three recovery choices.
    - Registry warnings such as `REGISTRY_JSON_INVALID`, `REGISTRY_ENTRY_STALE`, and `REGISTRY_ENTRY_OUTSIDE_CANVAS_DIR` mean the plugin recovered by trusting only current project-local `MindrawCanvas/` packages.
 
 ## Safety Rules
@@ -59,9 +61,9 @@ Use this skill when the user says:
 - Do not write `drawing.excalidraw`, `manifest.json`, `.assets/`, or any other `.mindraw` package internals.
 - Do not overwrite an existing `.mindraw`.
 - Do not silently edit a user project's `.gitignore`.
-- Keep project canvas selection project-scoped. Do not trust stale, damaged, or cross-project registry entries.
+- Keep project canvas selection project-scoped. Treat the registry only as a preference record; the App `inspect_legacy_canvas_recovery` result is the usability authority.
 - Do not reuse a stale sidebar URL from another project. The preview URL must carry the current project identity token, and `编辑` / double-click must fail closed on project mismatch.
 - Do not expose bearer tokens, loopback endpoints, runtime capability file paths, raw image bytes, private keys, or `.assets` physical implementation details.
 - The preview URL is the only loopback value that may be shown to the user for opening the local sidebar.
 - The sidebar preview is read-only. Editing must hand off to Mindraw desktop.
-- If Mindraw still lacks the required create or preview API after supported launch / retry, return the blocker and stop; do not fake a working canvas. For open/edit handoff, macOS LaunchServices fallback is allowed only for the exact latest-created package.
+- If Mindraw still lacks the required create, health, or preview API after supported launch / retry, return the blocker and stop; do not fake a working canvas. For open/edit handoff, macOS LaunchServices fallback is allowed only after the App has confirmed the target canvas is healthy.

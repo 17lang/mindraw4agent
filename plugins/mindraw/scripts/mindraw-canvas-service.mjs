@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import {
   inspectProjectCanvas,
   openCanvasInMindraw,
+  performProjectCanvasRecovery,
   publicState,
   resolveCanvasDir,
   resolveProjectRoot,
@@ -172,6 +173,10 @@ function htmlPage(state) {
   const projectContext = state.projectRootHash || projectRootHash(state.projectRoot);
   const projectLabel = state.projectLabel || projectRootLabel(state.projectRoot);
   const previewAvailable = state.ok === true && status === "READY" && state.preview?.available === true;
+  const recovery = state.recovery || null;
+  const recoveryOptions = recovery?.options || [];
+  const repairOption = recoveryOptions.find((option) => option.action === "repair_current");
+  const otherOption = recoveryOptions.find((option) => option.action === "open_other_healthy");
   const previewWidth = Number.isFinite(state.preview?.width) ? state.preview.width : 960;
   const previewHeight = Number.isFinite(state.preview?.height) ? state.preview.height : 540;
   const previewRevision = encodeURIComponent(String(state.preview?.revision ?? state.preview?.sha256 ?? state.preview?.byteLength ?? "initial"));
@@ -288,6 +293,9 @@ function htmlPage(state) {
       font-size: 13px;
       line-height: 1.45;
     }
+    #recoveryOptions { display: grid; gap: 8px; margin-top: 12px; }
+    #recoveryOptions select { min-height: 32px; border: 1px solid var(--border); border-radius: 7px; padding: 0 8px; font: inherit; }
+    #recoveryMessage { margin: 0 0 8px; }
     button {
       appearance: none;
       border: 1px solid #cbd2dc;
@@ -333,7 +341,9 @@ function htmlPage(state) {
         ${
 	          previewAvailable
 	            ? `<img id="previewImage" src="/api/preview?project=${encodeURIComponent(projectContext)}&v=${previewRevision}" alt="Mindraw canvas preview" draggable="false" width="${previewWidth}" height="${previewHeight}" data-preview-width="${previewWidth}" data-preview-height="${previewHeight}" data-preview-revision="${escapeHtml(state.preview?.revision ?? "")}" />`
-	            : `<div id="emptyState" role="status">${escapeHtml(blocker || "MINDRAW_PREVIEW_SOURCE_REQUIRED")}</div>`
+	            : recovery
+                ? `<div id="emptyState" role="status"><p id="recoveryMessage">${escapeHtml(recovery.message)}</p><div id="recoveryOptions"><button id="repairCurrent"${repairOption?.available ? "" : " disabled"}>修复此画布</button><select id="otherHealthy"${otherOption?.available ? "" : " disabled"}><option value="">打开其他可用画布</option>${(recovery.otherHealthyCanvases || []).map((canvas) => `<option value="${escapeHtml(canvas.name)}">${escapeHtml(canvas.name)}</option>`).join("")}</select><button id="openOtherHealthy"${otherOption?.available ? "" : " disabled"}>打开其他可用画布</button><button id="createNewCanvas">新建画布</button></div></div>`
+                : `<div id="emptyState" role="status">${escapeHtml(blocker || "MINDRAW_PREVIEW_SOURCE_REQUIRED")}</div>`
 	        }
       </div>
       ${previewAvailable ? `<div id="loadingState" role="status">Loading preview</div>` : ""}
@@ -437,6 +447,72 @@ function htmlPage(state) {
       currentPreviewRevision = "";
       render();
     }
+    function showRecovery(recovery) {
+      document.getElementById("loadingState")?.remove();
+      stage.innerHTML = '<div id="emptyState" role="status"><p id="recoveryMessage"></p><div id="recoveryOptions"></div></div>';
+      document.getElementById("recoveryMessage").textContent = recovery?.message || "当前项目画布需要你的选择。";
+      const options = document.getElementById("recoveryOptions");
+      const optionByAction = (action) => (recovery?.options || []).find((option) => option.action === action);
+      const repair = document.createElement("button");
+      repair.id = "repairCurrent";
+      repair.textContent = "修复此画布";
+      repair.disabled = optionByAction("repair_current")?.available !== true;
+      repair.addEventListener("click", () => chooseRecovery("repair_current"));
+      const select = document.createElement("select");
+      select.id = "otherHealthy";
+      select.disabled = optionByAction("open_other_healthy")?.available !== true;
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "打开其他可用画布";
+      select.append(placeholder);
+      for (const canvas of recovery?.otherHealthyCanvases || []) {
+        const option = document.createElement("option");
+        option.value = canvas.name;
+        option.textContent = canvas.name;
+        select.append(option);
+      }
+      const openOther = document.createElement("button");
+      openOther.id = "openOtherHealthy";
+      openOther.textContent = "打开其他可用画布";
+      openOther.disabled = select.disabled;
+      openOther.addEventListener("click", () => {
+        if (select.value) chooseRecovery("open_other_healthy", select.value);
+      });
+      const createNew = document.createElement("button");
+      createNew.id = "createNewCanvas";
+      createNew.textContent = "新建画布";
+      createNew.addEventListener("click", () => chooseRecovery("create_new"));
+      options.append(repair, select, openOther, createNew);
+      previewImage = null;
+      loadingState = null;
+      currentPreviewRevision = "";
+      render();
+    }
+    async function chooseRecovery(action, canvasName) {
+      const openStatus = document.getElementById("openStatus");
+      if (openStatus) openStatus.textContent = "处理中";
+      try {
+        const response = await fetch(projectUrl("/api/canvas-recovery"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action, canvasName: canvasName || null, projectRootHash: projectContext })
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.ok !== true) throw new Error(payload.error || "CANVAS_RECOVERY_FAILED");
+        if (openStatus) openStatus.textContent = action === "open_other_healthy" ? "Mindraw 已打开" : "已请求 Mindraw 处理";
+        await refreshState(true);
+      } catch (error) {
+        if (openStatus) openStatus.textContent = error?.message || "CANVAS_RECOVERY_FAILED";
+      }
+    }
+    function installRecoveryHandlers() {
+      document.getElementById("repairCurrent")?.addEventListener("click", () => chooseRecovery("repair_current"));
+      document.getElementById("createNewCanvas")?.addEventListener("click", () => chooseRecovery("create_new"));
+      document.getElementById("openOtherHealthy")?.addEventListener("click", () => {
+        const name = document.getElementById("otherHealthy")?.value || "";
+        if (name) chooseRecovery("open_other_healthy", name);
+      });
+    }
     function installOrRefreshPreview(preview, force = false) {
       const revision = preview?.revision || preview?.sha256 || preview?.byteLength || String(Date.now());
       if (!previewImage) {
@@ -465,6 +541,8 @@ function htmlPage(state) {
         updateStateChrome(state);
         if (state.ok === true && state.status === "READY" && state.preview?.available === true) {
           installOrRefreshPreview(state.preview, force);
+        } else if (state.recovery) {
+          showRecovery(state.recovery);
         } else {
           showBlockedPreview(state.blockers?.[0]?.code || state.status || "MINDRAW_PREVIEW_SOURCE_REQUIRED");
         }
@@ -576,6 +654,7 @@ function htmlPage(state) {
       render();
       setInterval(() => refreshState(false), 2000);
     }
+    installRecoveryHandlers();
     window.addEventListener("resize", fitToView);
     window.__mindrawRefreshNow = refreshState;
   </script>
@@ -618,6 +697,34 @@ async function createPreviewServer({ projectRoot, capabilityPath, launchFallback
         sendJson(res, 200, publicPreviewState(state, serviceProjectRoot));
         return;
       }
+      if (url.pathname === "/api/canvas-recovery" && req.method === "POST") {
+        const context = validateProjectContext({ req, url, body, projectRoot: serviceProjectRoot });
+        if (!context.ok) {
+          sendJson(res, 409, projectContextMismatchPayload({ projectRoot: serviceProjectRoot, receivedProjectRootHash: context.receivedProjectRootHash }));
+          return;
+        }
+        try {
+          const result = await performProjectCanvasRecovery({
+            projectRoot: serviceProjectRoot,
+            action: body.action,
+            canvasName: typeof body.canvasName === "string" ? body.canvasName : null,
+            capabilityPath,
+            launchFallbackCommand,
+          });
+          state = result.state;
+          sendJson(res, 200, {
+            ok: result.state?.ok === true || result.opened?.ok === true || result.repaired?.repaired === true,
+            action: result.action,
+            opened: result.opened,
+            repaired: result.repaired,
+            state: result.state ? publicPreviewState(result.state, serviceProjectRoot) : null,
+            service: serviceIdentity(serviceProjectRoot),
+          });
+        } catch (error) {
+          sendJson(res, 409, { ok: false, error: error.code || "CANVAS_RECOVERY_FAILED", service: serviceIdentity(serviceProjectRoot) });
+        }
+        return;
+      }
       if (url.pathname === "/api/preview") {
         const context = validateProjectContext({ req, url, body, projectRoot: serviceProjectRoot });
         if (!context.ok) {
@@ -658,7 +765,7 @@ async function createPreviewServer({ projectRoot, capabilityPath, launchFallback
         if (!canvasPath) {
           sendJson(res, 409, {
             ok: false,
-            error: state.blockers?.[0]?.code || "CANVAS_PATH_REQUIRED",
+            error: state.recovery ? "ACTION_REQUIRED_CANVAS_RECOVERY" : state.blockers?.[0]?.code || "CANVAS_PATH_REQUIRED",
             state: publicPreviewState(state, serviceProjectRoot),
           });
           return;
@@ -668,7 +775,7 @@ async function createPreviewServer({ projectRoot, capabilityPath, launchFallback
           sendJson(res, 409, scopedCanvas);
           return;
         }
-        const opened = await openCanvasInMindraw({ canvasPath: scopedCanvas.canvasPath, capabilityPath, launchFallbackCommand });
+        const opened = await openCanvasInMindraw({ canvasPath: scopedCanvas.canvasPath, healthConfirmed: true, capabilityPath, launchFallbackCommand });
         sendJson(res, 200, { ok: true, opened, service: serviceIdentity(serviceProjectRoot) });
         return;
       }
@@ -869,6 +976,7 @@ async function serve(args) {
 async function startMockMindrawRuntime(root, options = {}) {
   const token = "m4c-mcpe-02-mock-token";
   const calls = [];
+  const canvasHealthByName = options.canvasHealthByName || {};
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://127.0.0.1");
@@ -952,13 +1060,31 @@ async function startMockMindrawRuntime(root, options = {}) {
         return;
       }
       if (request.method === "mindraw.app.open_package") {
+        const health = canvasHealthByName[basename(packagePath)] || { health: "healthy" };
+        if (health.health === "repairable" && health.canRepair !== false) {
+          canvasHealthByName[basename(packagePath)] = { health: "healthy" };
+        }
         sendJson(res, 200, {
           jsonrpc: "2.0",
           id: request.id,
           result: {
             packagePath,
             opened: true,
-            documentId: `mock_${packagePath?.split("/").at(-1)?.replace(/[^a-zA-Z0-9]/g, "_")}`
+            documentId: `mock_${packagePath?.split("/").at(-1)?.replace(/[^a-zA-Z0-9]/g, "_")}`,
+            legacyRecovery: health.health === "repairable" ? { backupPath: "<app-owned-backup>" } : null
+          }
+        });
+        return;
+      }
+      if (request.method === "mindraw.app.inspect_legacy_canvas_recovery") {
+        const health = canvasHealthByName[basename(packagePath)] || { health: "healthy" };
+        sendJson(res, 200, {
+          jsonrpc: "2.0",
+          id: request.id,
+          result: {
+            status: health.health || "healthy",
+            reasonCode: health.reasonCode || null,
+            canRepair: health.canRepair !== false,
           }
         });
         return;
@@ -986,6 +1112,7 @@ async function startMockMindrawRuntime(root, options = {}) {
         createBlankPackage: "write",
         previewSnapshot: "read",
         openPackage: "write",
+        legacyCanvasRecovery: "read",
         deepLinkOpen: "open",
         targetFramePixelPayload: "read"
       },
@@ -993,12 +1120,13 @@ async function startMockMindrawRuntime(root, options = {}) {
         "mindraw.app.create_blank_package",
         "mindraw.app.get_preview_snapshot",
         "mindraw.app.open_package",
+        "mindraw.app.inspect_legacy_canvas_recovery",
         "mindraw.app.get_target_frame_pixel_payload"
       ]
     }),
     "utf8"
   );
-  return { server, capabilityPath, calls };
+  return { server, capabilityPath, calls, canvasHealthByName };
 }
 
 async function writeMockOpenCommand(root, options = {}) {
@@ -1022,9 +1150,9 @@ process.exit(0);
   return commandPath;
 }
 
-async function runMcpStdio({ projectRoot, capabilityPath }) {
+async function runMcpStdio({ projectRoot, capabilityPath, messages: suppliedMessages = null }) {
   const serverPath = join(dirname(new URL(import.meta.url).pathname), "../mcp/server.mjs");
-  const messages = [
+  const defaultMessages = [
     { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
     { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
     {
@@ -1046,6 +1174,7 @@ async function runMcpStdio({ projectRoot, capabilityPath }) {
       }
     }
   ];
+  const messages = suppliedMessages || defaultMessages;
   const child = spawn(process.execPath, [serverPath], {
     env: { ...process.env, MINDRAW_RUNTIME_CAPABILITY_PATH: capabilityPath },
     stdio: ["pipe", "pipe", "pipe"]
@@ -1142,6 +1271,26 @@ async function mcpSmoke(args) {
       ok: openPayload.ok === true && openPayload.opened?.method === "mindraw.app.open_package" && openPayload.opened?.fallbackUsed === false,
       opened: openPayload.opened
     });
+    const second = await inspectProjectCanvas({ projectRoot: root, createNew: true, capabilityPath: mockRuntime.capabilityPath });
+    mockRuntime.canvasHealthByName[second.latestCanvas.name] = { health: "invalid", reasonCode: "ASSET_LIST_NOT_EMPTY", canRepair: false };
+    await rm(join(root, "MindrawCanvas", ".mindraw-canvas-registry.json"), { force: true });
+    const recoveryMcp = await runMcpStdio({
+      projectRoot: root,
+      capabilityPath: mockRuntime.capabilityPath,
+      messages: [
+        { jsonrpc: "2.0", id: 10, method: "initialize", params: {} },
+        { jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "inspect_mindraw_project_canvas", arguments: { projectRoot: root } } },
+        { jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "open_mindraw_project_canvas", arguments: { projectRoot: root, dryRunOpen: true } } },
+      ],
+    });
+    const recoveryInspect = JSON.parse(recoveryMcp.responses.find((response) => response.id === 11)?.result?.content?.[0]?.text ?? "{}");
+    const recoveryOpen = JSON.parse(recoveryMcp.responses.find((response) => response.id === 12)?.result?.content?.[0]?.text ?? "{}");
+    report.checks.push({
+      name: "MCP does not silently select an older healthy canvas when a missing registry leaves the newest canvas invalid",
+      ok: recoveryMcp.exit.code === 0 && recoveryInspect.ok === false && recoveryInspect.state?.status === "ACTION_REQUIRED_CANVAS_RECOVERY" && recoveryInspect.state?.latestCanvas === null && recoveryInspect.state?.recovery?.currentCanvas?.name === second.latestCanvas.name && recoveryInspect.state?.recovery?.options?.some((option) => option.action === "repair_current" && option.available === false) && recoveryOpen.ok === false && recoveryOpen.error === "ACTION_REQUIRED_CANVAS_RECOVERY",
+      inspect: recoveryInspect.state,
+      openError: recoveryOpen.error,
+    });
     const serialized = stableJson(report);
     report.redaction = {
       tokenIncluded: serialized.includes("m4c-mcpe-02-mock-token"),
@@ -1180,6 +1329,7 @@ async function httpSmoke(args) {
   let blockedServer = null;
   let fallbackServer = null;
   let createBootstrapServer = null;
+  let recoveryServer = null;
   let createBootstrapGetState = null;
   const report = {
     ok: false,
@@ -1314,6 +1464,34 @@ async function httpSmoke(args) {
       previewPayload: blockedPreviewPayload,
     });
 
+    const recoveryRoot = join(root, "project-missing-registry-recovery");
+    await mkdir(recoveryRoot, { recursive: true });
+    const recoveryFirst = await inspectProjectCanvas({ projectRoot: recoveryRoot, capabilityPath: mockRuntime.capabilityPath });
+    const recoverySecond = await inspectProjectCanvas({ projectRoot: recoveryRoot, createNew: true, capabilityPath: mockRuntime.capabilityPath });
+    mockRuntime.canvasHealthByName[recoverySecond.latestCanvas.name] = { health: "repairable", reasonCode: "LEGACY_EMPTY_ASSETS", canRepair: true };
+    await rm(join(recoveryRoot, "MindrawCanvas", ".mindraw-canvas-registry.json"), { force: true });
+    ({ server: recoveryServer } = await createPreviewServer({ projectRoot: recoveryRoot, capabilityPath: mockRuntime.capabilityPath }));
+    await new Promise((resolve, reject) => {
+      recoveryServer.once("error", reject);
+      recoveryServer.listen(0, "127.0.0.1", resolve);
+    });
+    const recoveryBaseUrl = `http://127.0.0.1:${recoveryServer.address().port}`;
+    const recoveryIdentity = await fetch(`${recoveryBaseUrl}/api/identity`).then((response) => response.json());
+    const recoveryState = await fetch(withProjectContext(`${recoveryBaseUrl}/api/state`, recoveryIdentity.projectRoot || recoveryRoot)).then((response) => response.json());
+    const recoveryOpen = await fetch(withProjectContext(`${recoveryBaseUrl}/api/open-edit`, recoveryIdentity.projectRoot || recoveryRoot), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectRootHash: projectRootHash(recoveryIdentity.projectRoot || recoveryRoot), source: "missing-registry-repairable" }),
+    });
+    const recoveryOpenPayload = await recoveryOpen.json();
+    report.checks.push({
+      name: "HTTP state and open route fail closed for a missing-registry newest repairable canvas instead of opening an older healthy one",
+      ok: recoveryState.status === "ACTION_REQUIRED_CANVAS_RECOVERY" && recoveryState.latestCanvas === null && recoveryState.recovery?.currentCanvas?.name === recoverySecond.latestCanvas.name && recoveryOpen.status === 409 && recoveryOpenPayload.error === "ACTION_REQUIRED_CANVAS_RECOVERY" && recoveryFirst.latestCanvas.name !== recoverySecond.latestCanvas.name,
+      state: recoveryState,
+      openHttpStatus: recoveryOpen.status,
+      openError: recoveryOpenPayload.error,
+    });
+
     const fallbackRoot = join(root, "project-open-fallback");
     const fallbackCanvasPath = join(fallbackRoot, "MindrawCanvas", `${currentSmokeDatePrefix()}01.mindraw`);
     await mkdir(fallbackCanvasPath, { recursive: true });
@@ -1336,18 +1514,14 @@ async function httpSmoke(args) {
 	      headers: { "content-type": "application/json" },
 	      body: JSON.stringify({ projectRootHash: projectRootHash(fallbackServiceProjectRoot), source: "http-smoke" }),
 	    }).then((response) => response.json());
-    const expectedMacFallback =
-      fallbackState.status === "BLOCKED_MINDRAW_PREVIEW_SOURCE_REQUIRED" &&
-      fallbackOpenResult.ok === true &&
-      fallbackOpenResult.opened?.opened === true &&
-      fallbackOpenResult.opened?.fallbackUsed === true &&
-      fallbackOpenResult.opened?.method === "macos.open.bundle" &&
-      fallbackOpenResult.opened?.fallbackReason?.code === "MINDRAW_OPEN_PACKAGE_API_REQUIRED" &&
-      fallbackOpenResult.opened?.fallbackReason?.reason === "CAPABILITY_FILE_NOT_FOUND" &&
-      fallbackOpenResult.opened?.canvasPath === fallbackState.latestCanvas?.path;
+    const expectedHealthFailClosed =
+      fallbackState.status === "BLOCKED_MINDRAW_CANVAS_HEALTH_API_REQUIRED" &&
+      fallbackState.latestCanvas === null &&
+      fallbackOpenResult.ok === false &&
+      fallbackOpenResult.error === "MINDRAW_CANVAS_HEALTH_API_REQUIRED";
     report.checks.push({
-      name: "edit endpoint uses macOS launch fallback when openPackage capability is unavailable",
-      ok: process.platform === "darwin" ? expectedMacFallback : fallbackOpenResult.ok === false && fallbackOpenResult.error === "MINDRAW_OPEN_PACKAGE_API_REQUIRED",
+      name: "edit endpoint fails closed when Mindraw cannot provide the required canvas health conclusion",
+      ok: expectedHealthFailClosed,
       state: fallbackState,
       opened: fallbackOpenResult.opened,
     });
@@ -1414,6 +1588,7 @@ async function httpSmoke(args) {
     await new Promise((resolve) => server.close(resolve));
 	    if (blockedServer) await new Promise((resolve) => blockedServer.close(resolve));
 	    if (fallbackServer) await new Promise((resolve) => fallbackServer.close(resolve));
+	    if (recoveryServer) await new Promise((resolve) => recoveryServer.close(resolve));
 	    if (createBootstrapServer) await new Promise((resolve) => createBootstrapServer.close(resolve));
     await new Promise((resolve) => mockRuntime.server.close(resolve));
     await new Promise((resolve) => blockedRuntime.server.close(resolve));
@@ -1475,13 +1650,44 @@ async function smoke(args) {
       preview: two.preview
     });
 
-    await rm(join(canvasDir, ".mindraw-canvas-registry.json"), { force: true });
-    const recovered = publicState(await inspectProjectCanvas({ projectRoot: root, createNew: false }));
+    mockRuntime.canvasHealthByName[createNew.latestCanvas.name] = { health: "repairable", reasonCode: "LEGACY_EMPTY_ASSETS", canRepair: true };
+    const repairable = publicState(await inspectProjectCanvas({ projectRoot: root, createNew: false }));
     report.checks.push({
-      name: "missing registry recovers latest-created from canonical names",
-      ok: recovered.status === "READY" && recovered.latestCanvas?.name === createNew.latestCanvas?.name,
-      latestCanvas: recovered.latestCanvas
+      name: "repairable preferred canvas requires an explicit recovery choice and does not silently switch to another healthy canvas",
+      ok:
+        repairable.status === "ACTION_REQUIRED_CANVAS_RECOVERY" &&
+        repairable.latestCanvas === null &&
+        repairable.recovery?.currentCanvas?.name === createNew.latestCanvas.name &&
+        repairable.recovery?.options?.some((option) => option.action === "repair_current" && option.available === true) &&
+        repairable.recovery?.otherHealthyCanvases?.some((canvas) => canvas.name === initial.latestCanvas.name),
+      state: repairable
     });
+    const repairResult = await performProjectCanvasRecovery({ projectRoot: root, action: "repair_current" });
+    report.checks.push({
+      name: "explicit repair is delegated to Mindraw App and returns the repaired canvas to healthy selection",
+      ok: repairResult.repaired?.repaired === true && repairResult.state?.status === "READY" && repairResult.state?.latestCanvas?.name === createNew.latestCanvas.name,
+      action: repairResult.action,
+      state: publicState(repairResult.state)
+    });
+
+    mockRuntime.canvasHealthByName[createNew.latestCanvas.name] = { health: "repairable", reasonCode: "LEGACY_EMPTY_ASSETS", canRepair: true };
+    await rm(join(canvasDir, ".mindraw-canvas-registry.json"), { force: true });
+    const missingRegistryRepairable = publicState(await inspectProjectCanvas({ projectRoot: root, createNew: false }));
+    report.checks.push({
+      name: "missing registry preserves the latest repairable canvas as an explicit recovery choice instead of silently opening an older healthy canvas",
+      ok: missingRegistryRepairable.status === "ACTION_REQUIRED_CANVAS_RECOVERY" && missingRegistryRepairable.latestCanvas === null && missingRegistryRepairable.recovery?.currentCanvas?.name === createNew.latestCanvas.name,
+      state: missingRegistryRepairable
+    });
+    mockRuntime.canvasHealthByName[createNew.latestCanvas.name] = { health: "invalid", reasonCode: "ASSET_LIST_NOT_EMPTY", canRepair: false };
+    await writeFile(join(canvasDir, ".mindraw-canvas-registry.json"), "{ damaged json", "utf8");
+    const damagedRegistryInvalid = publicState(await inspectProjectCanvas({ projectRoot: root, createNew: false }));
+    report.checks.push({
+      name: "damaged registry preserves the latest invalid canvas as an explicit recovery choice with repair unavailable",
+      ok: damagedRegistryInvalid.status === "ACTION_REQUIRED_CANVAS_RECOVERY" && damagedRegistryInvalid.latestCanvas === null && damagedRegistryInvalid.recovery?.currentCanvas?.name === createNew.latestCanvas.name && damagedRegistryInvalid.recovery?.options?.some((option) => option.action === "repair_current" && option.available === false),
+      state: damagedRegistryInvalid
+    });
+    mockRuntime.canvasHealthByName[createNew.latestCanvas.name] = { health: "healthy" };
+    const recovered = publicState(await inspectProjectCanvas({ projectRoot: root, createNew: false }));
 
     await mkdir(join(canvasDir, "notes.mindraw"), { recursive: true });
     const withNonstandard = publicState(await inspectProjectCanvas({ projectRoot: root, createNew: false }));
@@ -1492,8 +1698,8 @@ async function smoke(args) {
       warnings: withNonstandard.warnings
     });
 
-    const openDryRun = await openCanvasInMindraw({ canvasPath: withNonstandard.latestCanvas.path, dryRun: true });
-    const openLive = await openCanvasInMindraw({ canvasPath: withNonstandard.latestCanvas.path, dryRun: false });
+    const openDryRun = await openCanvasInMindraw({ canvasPath: withNonstandard.latestCanvas.path, healthConfirmed: true, dryRun: true });
+    const openLive = await openCanvasInMindraw({ canvasPath: withNonstandard.latestCanvas.path, healthConfirmed: true, dryRun: false });
     report.checks.push({
       name: "desktop handoff uses Mindraw open package API",
       ok: openDryRun.method === "mindraw.app.open_package" && openLive.opened === true && openLive.fallbackUsed === false,
@@ -1615,18 +1821,23 @@ async function smokeLifecycle(args) {
     });
 
     const registryPathA = join(projectA, "MindrawCanvas", ".mindraw-canvas-registry.json");
+    mockRuntime.canvasHealthByName[explicitNew.latestCanvas.name] = { health: "repairable", reasonCode: "LEGACY_EMPTY_ASSETS", canRepair: true };
     await rm(registryPathA, { force: true });
     const missingRegistry = publicState(await inspectProjectCanvas({ projectRoot: projectA, createNew: false }));
-    addCheck("L5", "missing registry recovers from canonical canvas package names", missingRegistry.status === "READY" && missingRegistry.latestCanvas?.name === explicitNew.latestCanvas?.name, {
-      latestCanvas: missingRegistry.latestCanvas,
+    addCheck("L5", "missing registry keeps the newest repairable canvas in recovery instead of silently selecting an older healthy canvas", missingRegistry.status === "ACTION_REQUIRED_CANVAS_RECOVERY" && missingRegistry.latestCanvas === null && missingRegistry.recovery?.currentCanvas?.name === explicitNew.latestCanvas.name, {
+      recovery: missingRegistry.recovery,
       warnings: missingRegistry.warnings
     });
 
+    mockRuntime.canvasHealthByName[explicitNew.latestCanvas.name] = { health: "invalid", reasonCode: "ASSET_LIST_NOT_EMPTY", canRepair: false };
     await writeFile(registryPathA, "{ damaged json", "utf8");
     const damagedRegistry = publicState(await inspectProjectCanvas({ projectRoot: projectA, createNew: false }));
-    addCheck("L6", "damaged registry is ignored with stable warning", damagedRegistry.status === "READY" && damagedRegistry.warnings?.some((item) => item.code === "REGISTRY_JSON_INVALID"), {
+    addCheck("L6", "damaged registry keeps the newest invalid canvas in recovery with repair unavailable", damagedRegistry.status === "ACTION_REQUIRED_CANVAS_RECOVERY" && damagedRegistry.latestCanvas === null && damagedRegistry.warnings?.some((item) => item.code === "REGISTRY_JSON_INVALID") && damagedRegistry.recovery?.options?.some((option) => option.action === "repair_current" && option.available === false), {
+      recovery: damagedRegistry.recovery,
       warnings: damagedRegistry.warnings
     });
+
+    mockRuntime.canvasHealthByName[explicitNew.latestCanvas.name] = { health: "healthy" };
 
     await writeFile(registryPathA, stableJson({
       version: 1,
@@ -1645,6 +1856,20 @@ async function smokeLifecycle(args) {
       latestCanvas: staleRegistry.latestCanvas,
       warnings: staleRegistry.warnings
     });
+
+    mockRuntime.canvasHealthByName[explicitNew.latestCanvas.name] = { health: "invalid", reasonCode: "ASSET_LIST_NOT_EMPTY", canRepair: false };
+    await writeFile(registryPathA, stableJson({
+      version: 1,
+      projectRoot: first.projectRoot,
+      canvases: [{ name: "99.0101-01.mindraw", path: join(first.projectRoot, "MindrawCanvas", "missing.mindraw") }],
+      latestCreatedCanvasPath: join(first.projectRoot, "MindrawCanvas", "missing.mindraw"),
+    }), "utf8");
+    const staleRegistryInvalid = publicState(await inspectProjectCanvas({ projectRoot: projectA, createNew: false }));
+    addCheck("L7b", "stale registry keeps the newest invalid canvas in recovery instead of silently selecting an older healthy canvas", staleRegistryInvalid.status === "ACTION_REQUIRED_CANVAS_RECOVERY" && staleRegistryInvalid.latestCanvas === null && staleRegistryInvalid.warnings?.some((item) => item.code === "REGISTRY_ENTRY_STALE") && staleRegistryInvalid.recovery?.currentCanvas?.name === explicitNew.latestCanvas.name && staleRegistryInvalid.recovery?.options?.some((option) => option.action === "repair_current" && option.available === false), {
+      recovery: staleRegistryInvalid.recovery,
+      warnings: staleRegistryInvalid.warnings,
+    });
+    mockRuntime.canvasHealthByName[explicitNew.latestCanvas.name] = { health: "healthy" };
 
     const projectBState = publicState(await inspectProjectCanvas({ projectRoot: projectB, createNew: false }));
     await writeFile(registryPathA, stableJson({
@@ -1762,7 +1987,7 @@ async function smokeLifecycle(args) {
     });
 
     const previewState = publicState(await inspectProjectCanvas({ projectRoot: projectA, createNew: false }));
-    const openDryRun = await openCanvasInMindraw({ canvasPath: previewState.latestCanvas.path, dryRun: true });
+    const openDryRun = await openCanvasInMindraw({ canvasPath: previewState.latestCanvas.path, healthConfirmed: true, dryRun: true });
     addCheck("L16", "preview and open API remain routed through Mindraw capabilities", previewState.preview?.available === true && openDryRun.method === "mindraw.app.open_package" && openDryRun.fallbackUsed === false, {
       preview: previewState.preview,
       openDryRun
@@ -1868,6 +2093,7 @@ async function sidebarPlaywrightSmoke(args) {
   let server = null;
   let blockedServer = null;
   let unavailableServer = null;
+  let recoveryServer = null;
   let browser = null;
   try {
     const { chromium } = await loadPlaywright();
@@ -2067,6 +2293,35 @@ async function sidebarPlaywrightSmoke(args) {
     report.screenshots.unavailable_360x720 = unavailableScreenshot;
     addCheck("runtime unavailable state is visible and redacted", unavailableText.includes("MINDRAW_CANVAS_CREATE_API_REQUIRED"), { unavailableText });
 
+    const recoveryRoot = join(root, "project-recovery");
+    await mkdir(recoveryRoot, { recursive: true });
+    const recoveryFirst = await inspectProjectCanvas({ projectRoot: recoveryRoot, capabilityPath: mockRuntime.capabilityPath });
+    const recoverySecond = await inspectProjectCanvas({ projectRoot: recoveryRoot, createNew: true, capabilityPath: mockRuntime.capabilityPath });
+    mockRuntime.canvasHealthByName[recoverySecond.latestCanvas.name] = { health: "repairable", reasonCode: "LEGACY_EMPTY_ASSETS", canRepair: true };
+    ({ server: recoveryServer } = await createPreviewServer({ projectRoot: recoveryRoot, capabilityPath: mockRuntime.capabilityPath }));
+    await new Promise((resolve, reject) => {
+      recoveryServer.once("error", reject);
+      recoveryServer.listen(0, "127.0.0.1", resolve);
+    });
+    const recoveryPage = await browser.newPage({ viewport: { width: 360, height: 720 } });
+    await recoveryPage.goto(`http://127.0.0.1:${recoveryServer.address().port}`, { waitUntil: "networkidle" });
+    await recoveryPage.waitForSelector("#recoveryOptions");
+    const recoveryUi = await recoveryPage.evaluate(() => ({
+      text: document.getElementById("emptyState")?.innerText,
+      repairEnabled: document.getElementById("repairCurrent")?.disabled === false,
+      otherOptions: Array.from(document.getElementById("otherHealthy")?.options || []).map((option) => option.value).filter(Boolean),
+      createEnabled: document.getElementById("createNewCanvas")?.disabled === false,
+      previewPresent: Boolean(document.getElementById("previewImage")),
+    }));
+    await recoveryPage.selectOption("#otherHealthy", recoveryFirst.latestCanvas.name);
+    await recoveryPage.click("#openOtherHealthy");
+    await recoveryPage.waitForTimeout(120);
+    const recoveryScreenshot = join(outDir, "sidebar-recovery-360x720.png");
+    await recoveryPage.screenshot({ path: recoveryScreenshot, fullPage: true });
+    await recoveryPage.close();
+    report.screenshots.recovery_360x720 = recoveryScreenshot;
+    addCheck("repairable canvas shows explicit repair / other healthy / new choices without opening it automatically", recoveryUi.text?.includes("修复此画布") && recoveryUi.repairEnabled && recoveryUi.otherOptions.includes(recoveryFirst.latestCanvas.name) && recoveryUi.createEnabled && recoveryUi.previewPresent === false, recoveryUi);
+
     const serialized = stableJson(report);
     report.redaction = {
       tokenIncluded: serialized.includes("m4c-mcpe-02-mock-token"),
@@ -2090,6 +2345,7 @@ async function sidebarPlaywrightSmoke(args) {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (blockedServer) await new Promise((resolve) => blockedServer.close(resolve));
     if (unavailableServer) await new Promise((resolve) => unavailableServer.close(resolve));
+    if (recoveryServer) await new Promise((resolve) => recoveryServer.close(resolve));
     await new Promise((resolve) => mockRuntime.server.close(resolve));
     if (!args.keep) {
       await rm(root, { recursive: true, force: true });

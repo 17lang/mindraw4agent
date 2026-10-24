@@ -15,6 +15,7 @@ jobs:
         with:
           node-version: "20"
       - run: npm run check
+      - run: npm run test:frame
       - run: npm run smoke
       - run: npm run smoke:http
       - run: npm run smoke:lifecycle

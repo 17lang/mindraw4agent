@@ -1,8 +1,8 @@
 {
   "name": "mindraw-codex-plugin",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "private": true,
-  "description": "Mindraw Codex plugin runtime root for the mindraw4agent public repository.",
+  "description": "Read Mindraw Frame links as text, annotations and PNG through the App API; open project canvases.",
   "license": "MIT",
   "author": {
     "name": "张军锋"
@@ -20,12 +20,13 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "node --check scripts/mindraw-canvas-service.mjs && node --check lib/project-canvas.mjs && node --check mcp/server.mjs && node --check scripts/doctor.mjs",
+    "check": "node --check scripts/mindraw-canvas-service.mjs && node --check lib/project-canvas.mjs && node --check mcp/server.mjs && node --check scripts/doctor.mjs && node --check lib/frame-read.mjs && node --check lib/png-integrity.mjs",
     "smoke": "node scripts/mindraw-canvas-service.mjs smoke",
     "smoke:http": "node scripts/mindraw-canvas-service.mjs smoke-http",
     "smoke:lifecycle": "node scripts/mindraw-canvas-service.mjs smoke-lifecycle",
     "smoke:mcp": "node scripts/mindraw-canvas-service.mjs smoke-mcp",
     "smoke:sidebar": "node scripts/mindraw-canvas-service.mjs smoke-sidebar",
-    "doctor": "node scripts/doctor.mjs"
+    "doctor": "node scripts/doctor.mjs",
+    "test:frame": "node --test test/frame-read.test.mjs"
   }
 }

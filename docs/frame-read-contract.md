@@ -1,0 +1,18 @@
+# Frame read contract
+
+Revision 2, 2026-10-24. M4C 0.2.0 candidate. Requires the App Frame resource adapter and revision-matched pixel API. Current scoped API evidence is against Mindraw 2.2.8 / Build202610240635; complete native Agent image acceptance remains pending. Historical experimental 2.3.0 numbering is not a minimum-version contract.
+
+Tool: `read_mindraw_frame({link})`. Input is one complete `mindraw://localhost?documentId=…&elementId=…&packageFormat=production` (or legacy / omitted format) URL. Duplicate identity/format fields, remote hosts, unsupported fields and non-Frame targets fail. HTML `&amp;` separators from copied text are normalized. No path or filesystem lookup is inferred.
+
+The document must be open in Mindraw. Duplicate open identities fail rather than selecting the first copy. Current App state is authoritative; unsaved editor content is supported by the App's existing snapshot API. Non-active tabs are explicitly labeled as stored tab content. This read never opens documents or changes the active tab.
+
+Discovery uses the current user's standard Mindraw runtime capability file, or an explicitly configured `MINDRAW_RUNTIME_CAPABILITY_PATH` for isolated verification. Only an authenticated IPv4 loopback `/rpc` endpoint is accepted. No credentials are embedded in installation assets or returned to the Agent. It calls only `mindraw.app.get_live_frame_context` and `mindraw.app.get_target_frame_pixel_payload`.
+
+Successful MCP result contains text JSON with target, readScope=frame-only, elements, workingRevision, contextRevision, dirty state, warnings, image metadata and elapsed duration; a second content block contains PNG image bytes. Physical package paths, runtime credentials and full file records are omitted. Snapshot hashes, context revisions and working revisions must match across calls; PNG MIME, dimensions, byte count and SHA256 are verified. Scope audits must prove exclusion of outside text/images/pixels. Required image references must be resolved by the App before success.
+
+Errors include INVALID_FRAME_LINK, MINDRAW_NOT_RUNNING, APP_UNAVAILABLE, APP_UPDATE_REQUIRED, APP_DOCUMENT_NOT_OPEN, APP_DOCUMENT_AMBIGUOUS, ACTIVE_EDITOR_UNAVAILABLE, TARGET_NOT_FOUND, TARGET_NOT_FRAME, FRAME_IMAGE_UNAVAILABLE, APP_RESOURCE_ADAPTER_REQUIRED, FRAME_SCOPE_UNPROVEN, FRAME_CHANGED_OR_SCOPE_UNPROVEN, TARGET_FRAME_PIXEL_PAYLOAD_REQUIRED and INVALID_FRAME_IMAGE. All failures are `isError=true`; none permit registry/package scanning or write fallback.
+
+Limits: 4096-character URL; 20-second HTTP response-header timeout; 96 MiB per App response; 32 MiB PNG; 128 MiB decoded scanlines. Only non-interlaced, 8-bit grayscale/truecolor with optional alpha canvas PNGs are accepted; other encodings fail closed. PNG is a controlled scene snapshot, not an OS screenshot; complex scene fidelity remains limited by the App renderer. A success proves the scoped contract only, not complete pixel parity with the desktop canvas.
+
+
+2026-10-24 verification update: installed Mindraw 2.2.8 / Build202610240635, runtime source 669f243 (delivery record 90ae265). Explicitly scoped App reads of isolated copies of both original Frames returned full PNGs with matching revisions. A fresh native Agent invoked read_mindraw_frame, but duplicate open document identities triggered APP_DOCUMENT_AMBIGUOUS. End-to-end Agent image consumption is still unverified. Preserve unknown unsaved windows; do not close or save them to unblock testing. Final compatibility acceptance awaits resolution and revalidation; source may be distributed as a prerelease with this blocker disclosed.

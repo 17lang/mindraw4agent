@@ -8,4 +8,4 @@ fi
 
 codex plugin remove mindraw@mindraw4agent || true
 codex plugin marketplace remove mindraw4agent || true
-codex plugin list
+echo "Mindraw plugin uninstall requested. Project documents are preserved."
